@@ -239,9 +239,16 @@ public class MavenProxyService {
       return null;
     }
     // Decide before the cache lookup so content cached before the policy was enabled is gated too.
-    Instant published = publishTime(
-        runtime, coordinates.groupId(), coordinates.artifactId(), coordinates.version(), path.main())
-        .orElse(null);
+    Instant published;
+    try {
+      published = publishTime(
+          runtime, coordinates.groupId(), coordinates.artifactId(), coordinates.version(), path.main())
+          .orElse(null);
+    } catch (MavenExceptions.MavenNotFoundException absent) {
+      // The upstream has neither the pom nor this file: nothing to quarantine, and clients must see
+      // a plain 404 so they can try their next repository (a 403 would abort the build).
+      return null;
+    }
     MinimumReleaseAge.require(
         coordinates.groupId() + ":" + coordinates.artifactId() + ":" + coordinates.version(),
         published, runtime.minimumReleaseAgeMinutesOrDefault(), clock.instant());
@@ -312,7 +319,8 @@ public class MavenProxyService {
   /**
    * Publish time of a release version. The request path is authoritative for the coordinates, never
    * the XML body. Unknown (HEAD failed, no Last-Modified) is reported as empty and treated as
-   * quarantined by the caller (fail closed).
+   * quarantined by the caller (fail closed). An upstream that answers 404 for both the pom and the
+   * requested file does not have the version at all, which is reported as not found instead.
    */
   private Optional<Instant> publishTime(
       RepositoryRuntime runtime, String groupId, String artifactId, String version,
@@ -322,13 +330,21 @@ public class MavenProxyService {
     if (known != null) {
       return Optional.of(known);
     }
-    Optional<Instant> published = headLastModified(runtime, pomPath(groupId, artifactId, version));
-    if (published.isEmpty() && requested != null) {
+    Head head = headLastModified(runtime, pomPath(groupId, artifactId, version));
+    if (head.lastModified() == null && requested != null) {
       // No pom (or no Last-Modified on it): fall back to the requested file itself.
-      published = headLastModified(runtime, requested.path());
+      Head file = headLastModified(runtime, requested.path());
+      head = file.lastModified() != null ? file : new Head(null, head.absent() && file.absent());
     }
-    published.ifPresent(time -> publishTimes.put(key, time));
-    return published;
+    if (head.lastModified() != null) {
+      publishTimes.put(key, head.lastModified());
+      return Optional.of(head.lastModified());
+    }
+    if (head.absent()) {
+      throw new MavenExceptions.MavenNotFoundException(
+          groupId + ":" + artifactId + ":" + version + " does not exist upstream");
+    }
+    return Optional.empty();
   }
 
   /**
@@ -379,7 +395,10 @@ public class MavenProxyService {
     return result;
   }
 
-  private Optional<Instant> headLastModified(RepositoryRuntime runtime, String path) {
+  /** {@code absent} is true only when the upstream answered 404/410, not for other failures. */
+  private record Head(Instant lastModified, boolean absent) {}
+
+  private Head headLastModified(RepositoryRuntime runtime, String path) {
     HttpRemoteFetcher.Request request = new HttpRemoteFetcher.Request(
         buildRemoteUrl(runtime.proxyRemoteUrl(), path), null, null, null, true)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)
@@ -387,8 +406,8 @@ public class MavenProxyService {
     try {
       return fetcher.fetchWithBodyRetry(request, path, result ->
           result.status() >= 200 && result.status() < 300
-              ? Optional.ofNullable(result.lastModified())
-              : Optional.<Instant>empty());
+              ? new Head(result.lastModified(), false)
+              : new Head(null, result.status() == 404 || result.status() == 410));
     } catch (IOException e) {
       throw new MavenExceptions.BadUpstreamException(
           "Unable to determine publish time of " + path + ": " + e.getMessage());

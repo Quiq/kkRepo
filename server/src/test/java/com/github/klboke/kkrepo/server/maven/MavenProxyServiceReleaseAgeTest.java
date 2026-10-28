@@ -209,8 +209,8 @@ class MavenProxyServiceReleaseAgeTest {
   @Test
   void unknownPublishTimeIsQuarantinedWithoutAnEligibleInstant() {
     Fixture fixture = fixture();
-    fixture.upstreamMissing("com/acme/demo/1.2/demo-1.2.pom");
-    fixture.upstreamMissing("com/acme/demo/1.2/demo-1.2.jar");
+    fixture.upstreamFailing("com/acme/demo/1.2/demo-1.2.pom", 503);
+    fixture.upstreamFailing("com/acme/demo/1.2/demo-1.2.jar", 503);
 
     ReleaseAgeDeniedException denied = assertThrows(
         ReleaseAgeDeniedException.class,
@@ -218,6 +218,33 @@ class MavenProxyServiceReleaseAgeTest {
             runtime(FORTY_EIGHT_HOURS), path("com/acme/demo/1.2/demo-1.2.jar"), false));
 
     assertNull(denied.eligibleAt());
+  }
+
+  @Test
+  void upstreamWithoutLastModifiedIsQuarantinedToo() {
+    Fixture fixture = fixture();
+    fixture.upstreamFailing("com/acme/demo/1.2/demo-1.2.pom", 200);
+    fixture.upstreamFailing("com/acme/demo/1.2/demo-1.2.jar", 200);
+
+    ReleaseAgeDeniedException denied = assertThrows(
+        ReleaseAgeDeniedException.class,
+        () -> fixture.service.get(
+            runtime(FORTY_EIGHT_HOURS), path("com/acme/demo/1.2/demo-1.2.jar"), false));
+
+    assertNull(denied.eligibleAt());
+  }
+
+  @Test
+  void versionThatDoesNotExistUpstreamIsNotQuarantined() {
+    Fixture fixture = fixture();
+    fixture.upstreamMissing("com/acme/demo/1.2/demo-1.2.pom");
+    fixture.upstreamMissing("com/acme/demo/1.2/demo-1.2.jar");
+
+    // A 404 stays a 404 (never a 403) so a client or group can fall through to the next repository.
+    assertThrows(
+        MavenExceptions.MavenNotFoundException.class,
+        () -> fixture.service.get(
+            runtime(FORTY_EIGHT_HOURS), path("com/acme/demo/1.2/demo-1.2.jar"), false));
   }
 
   @Test
@@ -305,6 +332,10 @@ class MavenProxyServiceReleaseAgeTest {
 
     void upstreamMissing(String path) {
       stubUpstream(path, 404, Map.of());
+    }
+
+    void upstreamFailing(String path, int status) {
+      stubUpstream(path, status, Map.of());
     }
 
     private void stubUpstream(String path, int status, Map<String, String> headers) {
