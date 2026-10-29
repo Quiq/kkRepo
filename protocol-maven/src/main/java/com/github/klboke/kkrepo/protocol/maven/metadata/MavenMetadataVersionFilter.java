@@ -69,14 +69,19 @@ public final class MavenMetadataVersionFilter {
     return null;
   }
 
+  /**
+   * {@code lastUpdated} is optional in the metadata schema. A missing or unparsable value stays
+   * omitted: stamping the current time would change the bytes on every request, so a checksum
+   * fetched a moment after the metadata would no longer match it.
+   */
   private static Instant parseLastUpdated(String text) {
     if (text == null || text.isBlank()) {
-      return Instant.now();
+      return null;
     }
     try {
       return LocalDateTime.parse(text.trim(), DOTLESS_TIMESTAMP).toInstant(ZoneOffset.UTC);
     } catch (DateTimeParseException e) {
-      return Instant.now();
+      return null;
     }
   }
 }

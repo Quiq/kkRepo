@@ -60,6 +60,30 @@ class MavenMetadataVersionFilterTest {
   }
 
   @Test
+  void omittedLastUpdatedStaysOmittedSoRepeatedFiltersProduceIdenticalBytes() throws Exception {
+    String withoutLastUpdated = METADATA.replace("<lastUpdated>20260110120000</lastUpdated>", "");
+
+    var first = MavenMetadataVersionFilter.retain(
+        bytes(withoutLastUpdated), version -> !version.equals("1.2")).orElseThrow();
+    Thread.sleep(1100);
+    var second = MavenMetadataVersionFilter.retain(
+        bytes(withoutLastUpdated), version -> !version.equals("1.2")).orElseThrow();
+
+    // A checksum served a moment after the metadata must hash the same bytes.
+    assertTrue(java.util.Arrays.equals(first.xml(), second.xml()));
+    assertTrue(!new String(first.xml(), StandardCharsets.UTF_8).contains("lastUpdated"));
+  }
+
+  @Test
+  void presentLastUpdatedIsPreserved() throws Exception {
+    var result = MavenMetadataVersionFilter.retain(
+        bytes(METADATA), version -> !version.equals("1.2")).orElseThrow();
+
+    assertTrue(new String(result.xml(), StandardCharsets.UTF_8)
+        .contains("<lastUpdated>20260110120000</lastUpdated>"));
+  }
+
+  @Test
   void documentsWithoutVersionsAreNotApplicable() throws Exception {
     String baseVersion = """
         <metadata><groupId>g</groupId><artifactId>a</artifactId><version>1.0-SNAPSHOT</version>
