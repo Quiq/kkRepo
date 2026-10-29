@@ -334,6 +334,8 @@
                 Use 0 to disable this policy and preserve existing behavior.
                 This is independent of content and metadata cache max age.
                 Versions with a missing or invalid publish time are blocked while enabled.
+                Go measures the commit time of a version, not when it was published, so it is a
+                weaker guard than the other formats.
                 Maven SNAPSHOT versions are exempt. PyPI upstreams must publish PEP 700
                 upload times (for example pypi.org).
               </p>

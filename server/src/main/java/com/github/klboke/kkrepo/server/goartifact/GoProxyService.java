@@ -54,6 +54,11 @@ import org.springframework.stereotype.Service;
  * storage); the node-local {@code publishTimes} cache only avoids re-reading {@code .info} blobs and
  * can be lost at any time. A version's publish time is immutable, so cached entries cannot disagree
  * across replicas, and a denial is never cached.
+ *
+ * <p>Limit: the GOPROXY {@code Time} is the <em>commit</em> time (even for tagged versions), not the
+ * time the version was published. A new tag on an old commit is therefore admitted immediately and a
+ * backdated commit date defeats the cooldown. This is documented as commit age, a weaker guard than
+ * the registry-supplied timestamps used for Maven and PyPI.
  */
 @Service
 public class GoProxyService {
@@ -74,7 +79,7 @@ public class GoProxyService {
   private final LocalCache<String, Instant> publishTimes = LocalCacheFactory.standard()
       .<String, Instant>builder("go-release-age-publish-times")
       .maximumSize(100_000)
-      .expireAfterAccess(Duration.ofHours(6))
+      .expireAfterWrite(Duration.ofHours(6))
       .build();
 
   public GoProxyService(
@@ -234,7 +239,7 @@ public class GoProxyService {
     return rebuild(raw, body, headOnly);
   }
 
-  /** Publish time of a canonical version, read from the cached upstream {@code .info}. */
+  /** Commit time (the GOPROXY {@code Time}) of a canonical version, read from the cached upstream {@code .info}. */
   private Optional<Instant> publishTime(RepositoryRuntime runtime, String module, String version) {
     if (version == null || !GoVersions.isCanonical(version)) {
       throw new MavenExceptions.MavenNotFoundException(module + "@" + version);
@@ -333,8 +338,14 @@ public class GoProxyService {
         original.lastModified());
   }
 
+  /**
+   * Cache identity of a publish time. It includes the upstream the time was read from: a proxy's
+   * remote URL can be edited without any signal reaching this node-local cache, and a timestamp
+   * learned from the former upstream must never answer for the new one (a warm node would otherwise
+   * admit what a cold node rejects).
+   */
   private static String publishKey(RepositoryRuntime runtime, String module, String version) {
-    return runtime.id() + "|" + module + "@" + version;
+    return runtime.id() + "|" + runtime.proxyRemoteUrl() + "|" + module + "@" + version;
   }
 
   private static String describe(GoPath path) {
