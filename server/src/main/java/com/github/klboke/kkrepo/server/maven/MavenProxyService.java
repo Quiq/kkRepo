@@ -89,7 +89,7 @@ public class MavenProxyService {
   private final LocalCache<String, Instant> publishTimes = LocalCacheFactory.standard()
       .<String, Instant>builder("maven-release-age-publish-times")
       .maximumSize(100_000)
-      .expireAfterAccess(Duration.ofHours(6))
+      .expireAfterWrite(Duration.ofHours(6))
       .build();
   private final AssetDao assetDao;
   private final BlobStorageRegistry blobStorageRegistry;
@@ -239,16 +239,14 @@ public class MavenProxyService {
       return null;
     }
     // Decide before the cache lookup so content cached before the policy was enabled is gated too.
-    Instant published;
-    try {
-      published = publishTime(
-          runtime, coordinates.groupId(), coordinates.artifactId(), coordinates.version(), path.main())
-          .orElse(null);
-    } catch (MavenExceptions.MavenNotFoundException absent) {
-      // The upstream has neither the pom nor this file: nothing to quarantine, and clients must see
-      // a plain 404 so they can try their next repository (a 403 would abort the build).
-      return null;
-    }
+    // An upstream that has neither the pom nor this file raises MavenNotFoundException from here, and
+    // that is deliberately NOT turned into "allowed": the request answers 404 without consulting the
+    // cache. Falling through would serve bytes cached before the policy was enabled, or a release the
+    // upstream has since withdrawn, which is exactly what the cooldown must not do. A 404 (unlike a
+    // 403) still lets clients and groups try their next repository.
+    Instant published = publishTime(
+        runtime, coordinates.groupId(), coordinates.artifactId(), coordinates.version(), path.main())
+        .orElse(null);
     MinimumReleaseAge.require(
         coordinates.groupId() + ":" + coordinates.artifactId() + ":" + coordinates.version(),
         published, runtime.minimumReleaseAgeMinutesOrDefault(), clock.instant());
@@ -424,9 +422,15 @@ public class MavenProxyService {
         + artifactId + "-" + version + ".pom";
   }
 
+  /**
+   * Cache identity of a publish time. It includes the upstream the time was read from: a proxy's
+   * remote URL can be edited without any signal reaching this node-local cache, and a timestamp
+   * learned from the former upstream must never answer for the new one (a warm node would otherwise
+   * admit what a cold node rejects).
+   */
   private static String publishKey(
       RepositoryRuntime runtime, String groupId, String artifactId, String version) {
-    return runtime.id() + "|" + groupId + ":" + artifactId + ":" + version;
+    return runtime.id() + "|" + runtime.proxyRemoteUrl() + "|" + groupId + ":" + artifactId + ":" + version;
   }
 
   private static byte[] readBounded(MavenResponse response) {

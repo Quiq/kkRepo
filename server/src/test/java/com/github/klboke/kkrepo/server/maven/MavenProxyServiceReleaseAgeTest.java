@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.maven;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -248,6 +249,41 @@ class MavenProxyServiceReleaseAgeTest {
   }
 
   @Test
+  void publishTimeLearnedFromTheFormerUpstreamDoesNotAnswerForANewRemoteUrl() {
+    Fixture fixture = fixture();
+    fixture.cached("com/acme/demo/1.2/demo-1.2.jar", "jar-bytes");
+    fixture.pom("1.2", NOW.minus(Duration.ofDays(10)));
+
+    // Warm this node's publish-time cache against the original, long-published upstream.
+    assertDoesNotThrow(() -> fixture.service.get(
+        runtime(FORTY_EIGHT_HOURS, "https://repo.example/maven2/"),
+        path("com/acme/demo/1.2/demo-1.2.jar"), false));
+
+    // The administrator points the same repository at a different upstream whose pom is brand new.
+    // A fresh node would HEAD it and refuse; this warm node must not reuse the former timestamp.
+    fixture.pom("1.2", NOW.minus(Duration.ofHours(1)));
+    assertThrows(
+        ReleaseAgeDeniedException.class,
+        () -> fixture.service.get(
+            runtime(FORTY_EIGHT_HOURS, "https://other-upstream.example/maven2/"),
+            path("com/acme/demo/1.2/demo-1.2.jar"), false));
+  }
+
+  @Test
+  void versionWithdrawnUpstreamIsNotServedFromAnOlderCacheEntry() {
+    Fixture fixture = fixture();
+    // Cached before the policy was enabled; the upstream has since removed the version and its pom.
+    fixture.cached("com/acme/demo/1.2/demo-1.2.jar", "withdrawn-bytes");
+    fixture.upstreamMissing("com/acme/demo/1.2/demo-1.2.pom");
+    fixture.upstreamMissing("com/acme/demo/1.2/demo-1.2.jar");
+
+    assertThrows(
+        MavenExceptions.MavenNotFoundException.class,
+        () -> fixture.service.get(
+            runtime(FORTY_EIGHT_HOURS), path("com/acme/demo/1.2/demo-1.2.jar"), false));
+  }
+
+  @Test
   void policyDisabledNeverContactsTheUpstreamForPublishTimes() throws Exception {
     Fixture fixture = fixture();
     fixture.cached("com/acme/demo/1.2/demo-1.2.jar", "jar-bytes");
@@ -275,9 +311,13 @@ class MavenProxyServiceReleaseAgeTest {
   }
 
   private static RepositoryRuntime runtime(int minimumReleaseAgeMinutes) {
+    return runtime(minimumReleaseAgeMinutes, "https://repo.example/maven2/");
+  }
+
+  private static RepositoryRuntime runtime(int minimumReleaseAgeMinutes, String remoteUrl) {
     return new RepositoryRuntime(
         10L, "maven-central", RepositoryFormat.MAVEN2, RepositoryType.PROXY, "maven2-proxy", true,
-        7L, null, "RELEASE", "STRICT", true, "https://repo.example/maven2/",
+        7L, null, "RELEASE", "STRICT", true, remoteUrl,
         60, 60, true, null, List.of(), minimumReleaseAgeMinutes);
   }
 

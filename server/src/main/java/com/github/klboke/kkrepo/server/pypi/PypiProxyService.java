@@ -73,7 +73,7 @@ public class PypiProxyService {
   private final LocalCache<String, Instant> publishTimes = LocalCacheFactory.standard()
       .<String, Instant>builder("pypi-release-age-publish-times")
       .maximumSize(200_000)
-      .expireAfterAccess(Duration.ofHours(6))
+      .expireAfterWrite(Duration.ofHours(6))
       .build();
 
   @Autowired
@@ -360,8 +360,14 @@ public class PypiProxyService {
     return links;
   }
 
+  /**
+   * Cache identity of a publish time. It includes the upstream the time was read from: a proxy's
+   * remote URL can be edited without any signal reaching this node-local cache, and a timestamp
+   * learned from the former upstream must never answer for the new one (a warm node would otherwise
+   * admit what a cold node rejects).
+   */
   private static String publishKey(RepositoryRuntime runtime, String normalized, String file) {
-    return runtime.id() + "|" + normalized + "|" + file;
+    return runtime.id() + "|" + runtime.proxyRemoteUrl() + "|" + normalized + "|" + file;
   }
 
   private static String sha256(byte[] bytes) {
