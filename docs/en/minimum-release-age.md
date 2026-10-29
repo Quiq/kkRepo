@@ -1,12 +1,12 @@
 # Minimum Release Age (Quarantine)
 
-A **proxy repository** can refuse to serve versions that were published less than a configurable number of minutes ago. Compromised releases (a hijacked maintainer account, a malicious package) are usually detected and withdrawn upstream within hours, so a cooldown of 48 hours (`2880` minutes) means a poisoned release is normally gone before any build can pull it through kkrepo. Hosted repositories are unaffected, and `0` (the default) disables the policy.
+A **proxy repository** can refuse to serve versions that were published less than a configurable number of minutes ago. Compromised releases (a hijacked maintainer account, a malicious package) are usually detected and withdrawn upstream within hours, so a cooldown of 48 hours (`2880` minutes) means a poisoned release is normally gone before any build can pull it through kkrepo. Hosted repositories are unaffected, and `0` (the default) disables the policy. For Go the age is measured from the commit time, not the publication time, which is a weaker guard (see [Upstream requirements](#upstream-requirements)).
 
 Set **Proxy settings → Minimum release age (min)** on an npm, Go, Maven or PyPI proxy, or `proxy.minimumReleaseAgeMinutes` in `/internal/repositories`. Groups have no setting of their own: they apply the policy of their proxy members and never filter hosted members.
 
 ## Behavior
 
-| Format | Publish time | Index / metadata | Direct download of a too-new version |
+| Format | Publish time (Go: commit time) | Index / metadata | Direct download of a too-new version |
 | --- | --- | --- | --- |
 | npm | `time` in the packument | versions hidden, dist-tags repaired | 404 |
 | Go | `Time` in `<version>.info` (the **commit** time, see below) | hidden from `@v/list`; `@latest` falls back to the newest mature release (404 if none) | 403 for `.info`, `.mod`, `.zip` |
